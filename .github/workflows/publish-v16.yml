@@ -1,0 +1,82 @@
+name: Publish verified OECT Capture v16 application
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v16.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v16
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ZIP: OECT_Capture_portable_2026.1.0.16.zip
+      EXPECTED_SHA256: 6b4a3e64fe8fb0efda601d24e8ca149bf7621d810b3f463e47797ab96d288899
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble only the prebuilt application and verify integrity
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,shutil,zipfile
+          parts=sorted(pathlib.Path('packages/v2026.1.0.16').glob('part*'))
+          assert [p.name for p in parts]==[f'part{i:02d}' for i in range(1,13)], 'Application transfer is incomplete'
+          package=pathlib.Path(os.environ['ZIP'])
+          with package.open('xb') as target:
+              for part in parts:
+                  with part.open('rb') as source:shutil.copyfileobj(source,target)
+          assert hashlib.sha256(package.read_bytes()).hexdigest()==os.environ['EXPECTED_SHA256'], 'SHA256 mismatch'
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None, 'ZIP CRC failure'
+              manifest=json.loads(archive.read('OECT_Capture_2026.1.0.16/update_manifest.json'))
+              assert manifest==dict(install_protocol=1,version='2026.1.0.16'), 'Installer manifest mismatch'
+              assert not any('/Data_capture/' in n and not n.endswith('/') for n in archive.namelist()), 'Unexpected acquisition files'
+          print('Application bytes match the locally validated portable package.')
+          PY
+      - name: Publish only one portable application attachment
+        run: |
+          set -euo pipefail
+          tag=v2026.1.0.16
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/existing.json" 2>/dev/null; then
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published release exists; never replace it"' "$RUNNER_TEMP/existing.json"
+          else
+            cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          Windows x64 便携应用，预发行，配套 MCU 2026.1.0.8。
+
+          本公开仓库只分发应用包和使用文档，不上传应用源码、MCU固件或实验数据。
+
+          v16 内置检查、附件下载和浏览器入口已指向 OECT_Capture_Releases，正常使用无需登录或访问令牌。可手动下载，也可启用自动下载；下载完成后始终要手动确认“重启并安装”。采集、保存及未保存数据阻止安装；旧程序和数据保留。
+
+          首次使用需完整解压 ZIP，保留 _internal 目录。详细功能、量程、保存文件、频谱、更新及常见问题见仓库首页 README。
+
+          验证：70项独立进程回归、解析器自检和6项冻结程序自检通过；MCU及采样/频谱算法不变。现场采集和时钟校准仍需独立验收。
+
+          ZIP SHA256：6b4a3e64fe8fb0efda601d24e8ca149bf7621d810b3f463e47797ab96d288899
+          NOTES
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --prerelease --title 'OECT Capture 2026.1.0.16 (Pre-release)' --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$tag" "$ZIP" --clobber
+          gh release download "$tag" --pattern "$ZIP" --dir "$RUNNER_TEMP/downloaded"
+          echo "$EXPECTED_SHA256  $RUNNER_TEMP/downloaded/$ZIP" | sha256sum --check
+          gh release edit "$tag" --draft=false --prerelease=true --latest=false
+      - name: Remove transfer pieces from the current branch after publication
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r --ignore-unmatch packages/v2026.1.0.16
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Remove temporary application transfer pieces after release'
+            git push origin HEAD:main
+          fi
