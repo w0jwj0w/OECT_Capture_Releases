@@ -1,0 +1,87 @@
+name: Publish verified OECT Capture v18 application
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v18.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v18
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ZIP: OECT_Capture_portable_2026.1.0.18.zip
+      EXPECTED_SHA256: a574fe25a129301bcd38b119a3ed03cc3d2f1cd430d224c668b5a0b319fd8a3d
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble only the prebuilt application and verify integrity
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,shutil,zipfile
+          parts=sorted(pathlib.Path('packages/v2026.1.0.18').glob('part*'))
+          assert [p.name for p in parts]==[f'part{i:02d}' for i in range(1,13)], 'Application transfer is incomplete'
+          package=pathlib.Path(os.environ['ZIP'])
+          with package.open('xb') as target:
+              for part in parts:
+                  with part.open('rb') as source:shutil.copyfileobj(source,target)
+          assert hashlib.sha256(package.read_bytes()).hexdigest()==os.environ['EXPECTED_SHA256'], 'SHA256 mismatch'
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None, 'ZIP CRC failure'
+              manifest=json.loads(archive.read('OECT_Capture_2026.1.0.18/update_manifest.json'))
+              assert manifest==dict(install_protocol=1,version='2026.1.0.18'), 'Installer manifest mismatch'
+              assert not any('/Data_capture/' in n and not n.endswith('/') for n in archive.namelist()), 'Unexpected acquisition files'
+          print('Application bytes match the locally validated portable package.')
+          PY
+      - name: Align v17 release notes with formal status
+        run: |
+          set -euo pipefail
+          gh release view v2026.1.0.17 --json body --jq .body | sed 's/便携应用，预发行，/便携应用，正式发行，/' > "$RUNNER_TEMP/v17_notes.md"
+          gh release edit v2026.1.0.17 --notes-file "$RUNNER_TEMP/v17_notes.md"
+      - name: Publish only one portable application attachment
+        run: |
+          set -euo pipefail
+          tag=v2026.1.0.18
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/existing.json" 2>/dev/null; then
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published release exists; never replace it"' "$RUNNER_TEMP/existing.json"
+          else
+            cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          # OECT Capture 2026.1.0.18
+          
+          Windows x64 便携应用，正式发行，配套 MCU 2026.1.0.8。
+          
+          展开“测试信息”，从脉冲、方波、正弦波、人体心电和数字心电中选择模板，点击“插入模板”后填写实际设置。模板追加为可编辑文本，包含波形参数、板卡编号、供电、接线、量程及 CH00～CH15 的 VGS、VDS 和备注栏。
+          
+          填写内容随本轮备注、运行记录及采集目录保存。已有 v17 的用户可通过“帮助 → 检查更新 / 更新设置”获取新版，下载后手动确认重启安装。
+          
+          73 项回归、解析器自检和 6 项冻结程序自检通过。
+          
+          ZIP SHA256 a574fe25a129301bcd38b119a3ed03cc3d2f1cd430d224c668b5a0b319fd8a3d
+          NOTES
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title 'OECT Capture 2026.1.0.18' --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$tag" "$ZIP" --clobber
+          gh release download "$tag" --pattern "$ZIP" --dir "$RUNNER_TEMP/downloaded"
+          echo "$EXPECTED_SHA256  $RUNNER_TEMP/downloaded/$ZIP" | sha256sum --check
+          gh release edit "$tag" --draft=false --prerelease=false --latest
+      - name: Remove transfer pieces from the current branch after publication
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r --ignore-unmatch packages/v2026.1.0.18
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Remove temporary application transfer pieces after release'
+            git push origin HEAD:main
+          fi
