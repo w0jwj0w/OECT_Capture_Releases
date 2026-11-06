@@ -1,0 +1,98 @@
+name: Publish verified OECT Capture v20 application
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v20.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v20
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ZIP: OECT_Capture_portable_2026.1.0.20.zip
+      BASE_SHA256: 11f8555d5cac39180c1f9f785bced3a202173a55fd9fb33bf6166cb74a7ef323
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble only the prebuilt application and verify integrity
+        run: |
+          python3 - <<'PY'
+          import copy,hashlib,json,os,pathlib,shutil,zipfile
+          parts=sorted(pathlib.Path('packages/v2026.1.0.20').glob('part*'))
+          assert [p.name for p in parts]==[f'part{i:02d}' for i in range(1,13)], 'Application transfer is incomplete'
+          package=pathlib.Path(os.environ['ZIP'])
+          base=pathlib.Path('verified-build.zip')
+          with base.open('xb') as target:
+              for part in parts:
+                  with part.open('rb') as source:shutil.copyfileobj(source,target)
+          assert hashlib.sha256(base.read_bytes()).hexdigest()==os.environ['BASE_SHA256'], 'Build SHA256 mismatch'
+          readme='OECT_Capture_2026.1.0.20/README.md'
+          guide=pathlib.Path('README.md').read_bytes()
+          with zipfile.ZipFile(base) as source, zipfile.ZipFile(package,'w') as target:
+              old=source.read(readme).replace(b'\r\n',b'\n')
+              assert old.replace('帮助 → 检查更新 / 更新设置'.encode(),'设置 → 检查更新'.encode())==guide, 'Unexpected guide change'
+              for entry in source.infolist():
+                  if entry.filename==readme:
+                      target.writestr(copy.copy(entry),guide)
+                  else:
+                      with source.open(entry) as src, target.open(copy.copy(entry),'w') as dst:
+                          shutil.copyfileobj(src,dst)
+          with open(os.environ['GITHUB_ENV'],'a') as env:
+              env.write('EXPECTED_SHA256='+hashlib.sha256(package.read_bytes()).hexdigest()+'\n')
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None, 'ZIP CRC failure'
+              assert archive.read(readme)==guide, 'Packaged guide mismatch'
+              manifest=json.loads(archive.read('OECT_Capture_2026.1.0.20/update_manifest.json'))
+              assert manifest==dict(install_protocol=1,version='2026.1.0.20'), 'Installer manifest mismatch'
+              assert not any('/Data_capture/' in n and not n.endswith('/') for n in archive.namelist()), 'Unexpected acquisition files'
+          print('Application binaries match the locally validated build. Packaged guide matches the repository.')
+          PY
+      - name: Publish only one portable application attachment
+        run: |
+          set -euo pipefail
+          tag=v2026.1.0.20
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/existing.json" 2>/dev/null; then
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published release exists; never replace it"' "$RUNNER_TEMP/existing.json"
+          else
+            cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          # OECT Capture 2026.1.0.20
+          
+          Windows x64 正式便携版，配套 MCU 2026.1.0.8。
+          
+          - 移除分时局部谱峰轨迹与逐窗谱峰统计，频谱导出生成全程频谱图和全程谱峰结论。时间窗频谱可在分析时间窗下拉框中查看。
+          - 点击峰值时，图中标注和上方读数栏同时显示频率（Hz）和幅度（µA）。标注会根据绘图区边界调整位置。
+          - 在“设置 → 应用设置”可单独关闭时域 CSV，并调整保存目录、自动保存及采集显示选项。原始 BIN、频谱与诊断照常保存。
+          - 使用说明提供 BIN 帧格式、CRC 校验和离线解码示例。
+          
+          77 项回归、解析器自检和 6 项冻结程序自检通过。
+          
+          NOTES
+            printf '\nZIP SHA256 %s\n' "$EXPECTED_SHA256" >> "$RUNNER_TEMP/notes.md"
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title 'OECT Capture 2026.1.0.20' --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$tag" "$ZIP" --clobber
+          gh release download "$tag" --pattern "$ZIP" --dir "$RUNNER_TEMP/downloaded"
+          echo "$EXPECTED_SHA256  $RUNNER_TEMP/downloaded/$ZIP" | sha256sum --check
+          gh release edit "$tag" --draft=false --prerelease=false --latest
+      - name: Remove transfer pieces from the current branch after publication
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r --ignore-unmatch packages/v2026.1.0.20
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Remove temporary application transfer pieces after release'
+            git push origin HEAD:main
+          fi
