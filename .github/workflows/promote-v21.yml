@@ -1,0 +1,48 @@
+name: Promote OECT Capture v21 to stable
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/promote-v21.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Mark the verified release as latest without replacing assets
+        run: |
+          set -euo pipefail
+          tag=v2026.1.0.21
+          gh api "repos/$GH_REPO/releases/tags/$tag" > before.json
+          python3 - <<'PY'
+          import json, os, pathlib
+          release = json.loads(pathlib.Path('before.json').read_text())
+          assert release['tag_name'] == 'v2026.1.0.21' and not release['draft']
+          expected = {'OECT_Capture_portable_2026.1.0.21.zip'}
+          if os.environ['GH_REPO'].endswith('/OECT_capture'):
+              expected |= {'OECT_MCU_2026.1.0.8.bin', 'OECT_MCU_2026.1.0.8.hex',
+                           'OECT_MCU_source_2026.1.0.8.zip', 'SHA256SUMS.txt', 'RELEASE_PAIRING.json'}
+          assert {asset['name'] for asset in release['assets']} == expected
+          for asset in release['assets']:
+              assert asset['size'] > 0 and asset['digest'].startswith('sha256:')
+          body = release['body'].replace('Windows x64 便携应用预发行版', 'Windows x64 正式便携版')
+          pathlib.Path('notes.md').write_text(body, encoding='utf-8')
+          PY
+          gh release edit "$tag" --draft=false --prerelease=false --latest --title 'OECT Capture 2026.1.0.21' --notes-file notes.md
+          gh api "repos/$GH_REPO/releases/latest" > after.json
+          python3 - <<'PY'
+          import json, pathlib
+          before, after = (json.loads(pathlib.Path(name).read_text()) for name in ('before.json', 'after.json'))
+          assert before['id'] == after['id'] and before['tag_name'] == after['tag_name']
+          assert not after['draft'] and not after['prerelease']
+          def assets(release):
+              return sorted((a['id'], a['name'], a['digest']) for a in release['assets'])
+          assert assets(before) == assets(after)
+          PY

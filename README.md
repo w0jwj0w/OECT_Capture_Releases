@@ -8,9 +8,9 @@
 
 - [查看所有发行版本](https://github.com/w0jwj0w/OECT_Capture_Releases/releases)
 - [v2026.1.0.20 下载页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.1.0.20)
-- [v2026.1.0.21 预发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.1.0.21)
+- [v2026.1.0.21 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.1.0.21)
 
-本说明适用于 **2026.1.0.21 预发行版**。最新正式版为 **2026.1.0.20**。两版配套 **MCU 2026.1.0.8**。
+本说明适用于 **2026.1.0.21 正式版**，配套 **MCU 2026.1.0.8**。
 
 1. 在发行页的 Assets 中下载所需版本的便携 ZIP。
 2. 将 ZIP **完整解压**到可写目录，保留 `_internal` 等子目录。不能只复制 EXE，也不要直接在压缩包内运行。
