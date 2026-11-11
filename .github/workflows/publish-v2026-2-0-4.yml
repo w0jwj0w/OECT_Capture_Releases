@@ -1,0 +1,86 @@
+name: Publish verified OECT Capture v2026-2-0-4 application
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v2026-2-0-4.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v2026-2-0-4
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ZIP: OECT_Capture_portable_2026.2.0.4.zip
+      EXPECTED_SHA256: 687ab7b95798962fb32e470e192223cf270342de307c928890a51241f0242c42
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble only the prebuilt application and verify integrity
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,shutil,zipfile
+          parts=sorted(pathlib.Path('packages/v2026.2.0.4').glob('part*'))
+          assert [p.name for p in parts]==[f'part{i:02d}' for i in range(1,13)], 'Application transfer is incomplete'
+          package=pathlib.Path(os.environ['ZIP'])
+          with package.open('xb') as target:
+              for part in parts:
+                  with part.open('rb') as source:shutil.copyfileobj(source,target)
+          assert hashlib.sha256(package.read_bytes()).hexdigest()==os.environ['EXPECTED_SHA256'], 'SHA256 mismatch'
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None, 'ZIP CRC failure'
+              manifest=json.loads(archive.read('OECT_Capture/OECT_Capture_2026.2.0.4/update_manifest.json'))
+              assert manifest==dict(install_protocol=2,version='2026.2.0.4'), 'Installer manifest mismatch'
+              assert not any('/Data_capture/' in n and not n.endswith('/') for n in archive.namelist()), 'Unexpected acquisition files'
+          print('Application bytes match the locally validated portable package.')
+          PY
+      - name: Publish only one portable application attachment
+        run: |
+          set -euo pipefail
+          tag=v2026.2.0.4
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/existing.json" 2>/dev/null; then
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published release exists; never replace it"' "$RUNNER_TEMP/existing.json"
+          else
+            cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          OECT Capture 2026.2.0.4 正式版
+          
+          - 使用选定的 A 方案 OECT 图标，应用于程序文件、窗口及快捷方式。
+          - 测试信息按选中的模式显示，只有空白文本模式显示自由文本框；移除追加和替换按钮。
+          - 板卡版次及编号始终可见，各模板和空白文本共用，保存时自动记录。
+          - 保存按钮移到右侧采集按钮旁；自动保存时禁用，手动成功后提示保存成功，重复保存需确认。
+          - Windows 当前电脑用户首次正常运行时后台创建桌面快捷方式；内置更新后继续自动改指新版，保留手动入口。
+          - MCU、原始 BIN 格式、采样时基和频谱计算保持本版配套协议。
+          
+          
+          公开应用库仅提供应用便携 ZIP。采样时间和频率精度仍由 MCU 声明时钟及实机校准决定。
+          
+          91 项回归、解析器自检和 6 项冻结程序自检通过。
+          
+          ZIP SHA256 687ab7b95798962fb32e470e192223cf270342de307c928890a51241f0242c42
+          NOTES
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title 'OECT Capture 2026.2.0.4' --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$tag" "$ZIP" --clobber
+          gh release download "$tag" --pattern "$ZIP" --dir "$RUNNER_TEMP/downloaded"
+          echo "$EXPECTED_SHA256  $RUNNER_TEMP/downloaded/$ZIP" | sha256sum --check
+          gh release edit "$tag" --draft=false --prerelease=false --latest
+      - name: Remove transfer pieces from the current branch after publication
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r --ignore-unmatch packages/v2026.2.0.4
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Remove temporary application transfer pieces after release'
+            git push origin HEAD:main
+          fi
