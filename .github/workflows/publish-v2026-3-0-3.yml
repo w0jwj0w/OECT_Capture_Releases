@@ -1,0 +1,320 @@
+name: Publish OECT Capture 2026.3.0.3 portable and Setup
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v2026-3-0-3.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-v2026-3-0-3
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      EXPECTED_SHA256: ffbd81a671bf46f2d5590fe02ac13e9d791abd39a5fbbf5cb6a3a5bf11b9ecd4
+      ZIP: OECT_Capture_portable_2026.3.0.3.zip
+      SETUP: OECT_Capture_Setup_2026.3.0.3.exe
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble locally verified portable package
+        run: |
+          @'
+          import hashlib,json,os,pathlib,shutil,zipfile
+          parts=sorted(pathlib.Path('packages/v2026.3.0.3').glob('part*'))
+          assert [p.name for p in parts]==[f'part{i:02d}' for i in range(1,13)]
+          package=pathlib.Path(os.environ['ZIP'])
+          with package.open('xb') as target:
+              for part in parts:
+                  with part.open('rb') as source:shutil.copyfileobj(source,target)
+          assert hashlib.sha256(package.read_bytes()).hexdigest()==os.environ['EXPECTED_SHA256']
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None
+              assert json.loads(archive.read('OECT_Capture/OECT_Capture_2026.3.0.3/update_manifest.json'))==dict(install_protocol=2,version='2026.3.0.3')
+              assert not any('/Data_capture/' in n and not n.endswith('/') for n in archive.namelist())
+              archive.extractall('payload')
+          '@ | Set-Content assemble.py -Encoding utf8
+          python assemble.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package verification failed' }
+      - name: Build Setup from the same packaged application
+        run: |
+          New-Item -ItemType Directory installer,assets,setup_build -Force | Out-Null
+          Copy-Item payload/OECT_Capture/OECT_Capture_2026.3.0.3/_internal/assets/oect.ico assets/oect.ico
+          @'
+          #ifndef AppVersion
+            #error AppVersion is required
+          #endif
+          #ifndef PayloadDir
+            #error PayloadDir is required
+          #endif
+          
+          [Setup]
+          AppId=OECT_Capture_Desktop
+          AppName=OECT Capture
+          AppVersion={#AppVersion}
+          AppPublisher=OECT Capture
+          AppPublisherURL=https://github.com/w0jwj0w/OECT_Capture_Releases
+          AppUpdatesURL=https://github.com/w0jwj0w/OECT_Capture_Releases/releases/latest
+          DefaultDirName={localappdata}\Programs\OECT_Capture
+          DisableProgramGroupPage=yes
+          PrivilegesRequired=lowest
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          MinVersion=10.0.17763
+          AppMutex=OECT_Capture_Installed
+          CloseApplications=no
+          RestartApplications=no
+          UninstallFilesDir={app}\.installer
+          UninstallDisplayIcon={app}\OECT_Capture_{#AppVersion}\OECT_Capture_{#AppVersion}.exe
+          SetupIconFile={#SourcePath}\..\assets\oect.ico
+          OutputBaseFilename=OECT_Capture_Setup_{#AppVersion}
+          Compression=lzma2/fast
+          SolidCompression=yes
+          WizardStyle=modern
+          SetupLogging=yes
+          LicenseFile=
+          
+          [Messages]
+          SetupAppTitle=OECT Capture 安装
+          SetupWindowTitle=OECT Capture 安装
+          WelcomeLabel1=欢迎安装 OECT Capture
+          WelcomeLabel2=安装版和便携版具有相同的采集功能。实验数据和样本库保存在版本目录之外，卸载时保留。%n%n安装前请关闭正在运行的 OECT Capture。
+          SelectDirLabel3=请选择安装位置（默认仅为当前用户安装，无需管理员权限）。
+          ButtonNext=下一步(&N) >
+          ButtonBack=< 上一步(&B)
+          ButtonCancel=取消
+          ButtonInstall=安装(&I)
+          ButtonFinish=完成(&F)
+          FinishedLabel=OECT Capture 已安装完成。程序内更新仍需手动确认重启。
+          
+          [Tasks]
+          Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："
+          
+          [Dirs]
+          Name: "{app}\Data_capture"; Flags: uninsneveruninstall
+          Name: "{app}\Heartbeat_library"; Flags: uninsneveruninstall
+          
+          [Files]
+          Source: "{#PayloadDir}\*"; DestDir: "{app}\OECT_Capture_{#AppVersion}"; Excludes: "oect_capture_config.toml"; Flags: ignoreversion recursesubdirs createallsubdirs uninsneveruninstall
+          Source: "{#PayloadDir}\oect_capture_config.toml"; DestDir: "{app}\OECT_Capture_{#AppVersion}"; Flags: onlyifdoesntexist uninsneveruninstall
+          
+          [Icons]
+          Name: "{userprograms}\OECT Capture"; Filename: "{app}\OECT_Capture_{#AppVersion}\OECT_Capture_{#AppVersion}.exe"; WorkingDir: "{app}\OECT_Capture_{#AppVersion}"
+          Name: "{userdesktop}\OECT Capture"; Filename: "{app}\OECT_Capture_{#AppVersion}\OECT_Capture_{#AppVersion}.exe"; WorkingDir: "{app}\OECT_Capture_{#AppVersion}"; Tasks: desktopicon
+          
+          [Registry]
+          Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\OECT_Capture_Desktop_is1"; ValueType: string; ValueName: "InstallLocation"; ValueData: "{app}"
+          
+          [Run]
+          Filename: "{app}\OECT_Capture_{#AppVersion}\OECT_Capture_{#AppVersion}.exe"; Description: "启动 OECT Capture"; Flags: nowait postinstall skipifsilent
+          
+          [UninstallDelete]
+          Type: files; Name: "{app}\installed.ini"
+          Type: files; Name: "{app}\installed.ini.tmp"
+          
+          [Code]
+          function GetAttrs(Name: string): Cardinal;
+            external 'GetFileAttributesW@kernel32.dll stdcall';
+          
+          function HasLinkParent(Name, Root: string): Boolean;
+          var A: Cardinal;
+          begin
+            Result := False;
+            while Length(Name) >= Length(Root) do begin
+              A := GetAttrs(Name);
+              if (A <> $FFFFFFFF) and ((A and $400) <> 0) then begin
+                Result := True; exit;
+              end;
+              if CompareText(Name, Root) = 0 then exit;
+              Name := ExtractFileDir(Name);
+            end;
+            Result := True;
+          end;
+          
+          function VersionFolder(Name: string): Boolean;
+          var I: Integer; Tail: string;
+          begin
+            Result := False;
+            if Pos('OECT_Capture_', Name) <> 1 then exit;
+            Tail := Copy(Name, 14, Length(Name));
+            if Tail = '' then exit;
+            for I := 1 to Length(Tail) do
+              if Pos(Tail[I], '0123456789._update') = 0 then exit;
+            Result := True;
+          end;
+          
+          function Part(var Value: string): Integer;
+          var P: Integer; S: string;
+          begin
+            P := Pos('.', Value);
+            if P = 0 then begin S := Value; Value := ''; end
+            else begin S := Copy(Value, 1, P-1); Delete(Value, 1, P); end;
+            Result := StrToIntDef(S, 0);
+          end;
+          
+          function PrepareToInstall(var NeedsRestart: Boolean): string;
+          var Previous, V, NewV: string; I, A, B, P: Integer;
+          begin
+            Result := '';
+            Previous := GetIniString('Setup', 'ActiveDirectory', '', ExpandConstant('{app}\installed.ini'));
+            if VersionFolder(Previous) then begin
+              V := Copy(Previous, 14, Length(Previous));
+              P := Pos('_update_', V); if P > 0 then V := Copy(V, 1, P-1);
+              NewV := '{#AppVersion}';
+              for I := 1 to 4 do begin
+                A := Part(V); B := Part(NewV);
+                if A > B then begin Result := '当前安装版更新，不能使用旧安装包降级。'; exit; end;
+                if A < B then exit;
+              end;
+            end;
+          end;
+          
+          procedure CurStepChanged(CurStep: TSetupStep);
+          var ExitCode: Integer; Exe: string;
+          begin
+            if CurStep = ssPostInstall then begin
+              Exe := ExpandConstant('{app}\OECT_Capture_{#AppVersion}\OECT_Capture_{#AppVersion}.exe');
+              if not Exec(Exe, '--setup-finalize', ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+                RaiseException('安装版设置登记失败。原有实验数据保留。');
+              if ExitCode <> 0 then RaiseException('安装版设置登记失败，请查看安装日志。原有实验数据保留。');
+            end;
+          end;
+          
+          procedure EmptyDirectories(Folder: string);
+          var R: TFindRec; Child: string;
+          begin
+            if HasLinkParent(Folder, ExpandConstant('{app}')) then exit;
+            if FindFirst(AddBackslash(Folder)+'*', R) then try
+              repeat
+                if (R.Name <> '.') and (R.Name <> '..') and ((R.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) then begin
+                  Child := AddBackslash(Folder)+R.Name;
+                  if (R.Attributes and $400) = 0 then EmptyDirectories(Child);
+                end;
+              until not FindNext(R);
+            finally FindClose(R); end;
+            RemoveDir(Folder); { Empty directories only. Never delete unknown files. }
+          end;
+          
+          procedure CleanPayload(Folder: string);
+          var Lines: TArrayOfString; I: Integer; Rel, Target: string;
+          begin
+            if HasLinkParent(Folder, ExpandConstant('{app}')) then exit;
+            if not FileExists(Folder+'\update_manifest.json') then exit;
+            if not LoadStringsFromFile(Folder+'\payload_files.txt', Lines) then exit;
+            if GetArrayLength(Lines) < 2 then exit;
+            if Lines[0] <> 'OECT_PAYLOAD_V1' then exit;
+            for I := 1 to GetArrayLength(Lines)-1 do begin
+              Rel := Lines[I]; StringChangeEx(Rel, '/', '\', True);
+              if (Rel = '') or (Pos('..', Rel) > 0) or (Pos(':', Rel) > 0) or (Rel[1] = '\') or
+                 (CompareText(Rel, 'oect_capture_config.toml') = 0) or
+                 (Pos('data_capture\', Lowercase(Rel)) = 1) or (Pos('heartbeat_library\', Lowercase(Rel)) = 1) then exit;
+            end;
+            for I := 1 to GetArrayLength(Lines)-1 do begin
+              Rel := Lines[I]; StringChangeEx(Rel, '/', '\', True);
+              Target := AddBackslash(Folder)+Rel;
+              if not HasLinkParent(Target, Folder) then DeleteFile(Target);
+            end;
+            DeleteFile(Folder+'\payload_files.txt');
+            EmptyDirectories(Folder);
+          end;
+          
+          procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+          var R: TFindRec; Root, Previous, Source, Exe: string; ExitCode: Integer;
+          begin
+            if CurUninstallStep = usUninstall then begin
+              Root := ExpandConstant('{app}');
+              Previous := GetIniString('Setup', 'ActiveDirectory', '', Root+'\installed.ini');
+              if VersionFolder(Previous) then begin
+                Source := Root+'\'+Previous+'\oect_capture_config.toml';
+                if not HasLinkParent(Source, Root) and FileExists(Source) then begin
+                  Exe := Root+'\'+Previous+'\'+Copy(Previous, 1, 13)+Copy(Previous, 14, 100)+'.exe';
+                  if Pos('_update_', Previous) > 0 then Exe := Root+'\'+Previous+'\'+Copy(Previous, 1, Pos('_update_', Previous)-1)+'.exe';
+                  if not Exec(Exe, '--setup-preserve-settings', ExtractFileDir(Exe), SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+                    Log('Settings backup could not run; original config file will be preserved.');
+                end;
+              end;
+              if FindFirst(Root+'\OECT_Capture_*', R) then try
+                repeat
+                  if ((R.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and VersionFolder(R.Name) then
+                    CleanPayload(Root+'\'+R.Name);
+                until not FindNext(R);
+              finally FindClose(R); end;
+            end;
+          end;
+          '@ | Set-Content installer/OECT_Capture.iss -Encoding utf8
+          $download=Join-Path $env:RUNNER_TEMP 'innosetup-6.7.4.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe' -OutFile $download
+          $signature=Get-AuthenticodeSignature -LiteralPath $download
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B.V.') { throw 'Compiler signature invalid' }
+          $tools=Join-Path $env:RUNNER_TEMP 'OECT_Inno'
+          $install=Start-Process -FilePath $download -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS','/SP-',('/DIR="'+$tools+'"')) -WindowStyle Hidden -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw 'Compiler installation failed' }
+          & "$tools/ISCC.exe" '/DAppVersion=2026.3.0.3' "/DPayloadDir=$pwd/payload/OECT_Capture/OECT_Capture_2026.3.0.3" "/O$pwd/setup_build" installer/OECT_Capture.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Setup compilation failed' }
+          Move-Item "setup_build/$env:SETUP" $env:SETUP
+      - name: Verify real Setup install, frozen startup and uninstall
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'OECT_Public_Setup_Validation'
+          $install=Start-Process -FilePath "$pwd/$env:SETUP" -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=!desktopicon',('/DIR="'+$root+'"')) -WindowStyle Hidden -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw 'Real Setup installation failed' }
+          $exe=Join-Path $root 'OECT_Capture_2026.3.0.3/OECT_Capture_2026.3.0.3.exe'
+          $smoke=Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru -Wait
+          if ($smoke.ExitCode -ne 0) { throw 'Installed frozen app failed' }
+          $data=Join-Path $root 'Data_capture/keep.bin'
+          [IO.File]::WriteAllText($data,'must preserve')
+          $key='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OECT_Capture_Desktop_is1'
+          $registered=Get-ItemProperty -LiteralPath $key
+          if ($registered.DisplayVersion -ne '2026.3.0.3' -or [IO.Path]::GetFullPath($registered.ActiveExe) -ne [IO.Path]::GetFullPath($exe)) { throw 'Registration mismatch' }
+          $uninstaller=$registered.UninstallString.Trim('"')
+          $uninstall=Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -WindowStyle Hidden -PassThru -Wait
+          if ($uninstall.ExitCode -ne 0 -or (Test-Path -LiteralPath $exe) -or (Test-Path -LiteralPath $key)) { throw 'Uninstall did not remove program/registration' }
+          if ([IO.File]::ReadAllText($data) -ne 'must preserve' -or -not (Test-Path (Join-Path $root '.settings/oect_capture_config.toml'))) { throw 'Data/settings were not retained' }
+      - name: Upload both complete attachments, download-check, publish as Latest
+        run: |
+          $tag='v2026.3.0.3'
+          $existing=gh release view $tag --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0 -and -not ($existing | ConvertFrom-Json).isDraft) { throw 'Published release exists; never replace it' }
+          @'
+          ## 2026.3.0.3 正式版
+          
+          - 新增 OECT_Capture_Setup_2026.3.0.3.exe，提供当前用户安装、桌面/开始菜单快捷方式及卸载入口。
+          - 默认安装于 %LOCALAPPDATA%/Programs/OECT_Capture，无需管理员权限。便携 ZIP 继续保留。
+          - 安装版采集程序与便携版一致，程序内更新沿用 ZIP 校验、下载和手动重启确认；新增卸载信息与开始菜单同步。
+          - 实验数据、样本库位于共享目录，卸载保留数据、设置和非程序文件。
+          - ADC 固件仍为2026.1.0.8，独立DAC仍为2026.3.0.2；安装软件不自动烧录固件。
+          
+          111项回归、解析器自检、7项冻结程序自检及6项安装生命周期集成验证通过。
+          '@ | Set-Content "$env:RUNNER_TEMP/notes.md" -Encoding utf8
+          $setupHash=(Get-FileHash $env:SETUP).Hash.ToLowerInvariant()
+          Add-Content "$env:RUNNER_TEMP/notes.md" ("ZIP SHA256: "+$env:EXPECTED_SHA256+"`n`nSetup SHA256: "+$setupHash)
+          if (-not $existing) { gh release create $tag --target $env:GITHUB_SHA --draft --title 'OECT Capture 2026.3.0.3' --notes-file "$env:RUNNER_TEMP/notes.md" }
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
+          gh release upload $tag $env:ZIP $env:SETUP --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Attachment upload failed' }
+          gh release download $tag --pattern $env:ZIP --pattern $env:SETUP --dir "$env:RUNNER_TEMP/download_check"
+          if ($LASTEXITCODE -ne 0) { throw 'Attachment download failed' }
+          if ((Get-FileHash "$env:RUNNER_TEMP/download_check/$env:ZIP").Hash.ToLowerInvariant() -ne $env:EXPECTED_SHA256) { throw 'ZIP download mismatch' }
+          if ((Get-FileHash "$env:RUNNER_TEMP/download_check/$env:SETUP").Hash.ToLowerInvariant() -ne $setupHash) { throw 'Setup download mismatch' }
+          gh release edit $tag --draft=false --prerelease=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Publication failed' }
+      - name: Remove application transfer pieces after publication
+        run: |
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r --ignore-unmatch packages/v2026.3.0.3
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup staging failed' }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Remove temporary application transfer pieces after release'
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup commit failed' }
+

@@ -1,5 +1,27 @@
 # OECT Capture：16 通道采集应用
 
+
+## 安装版与便携版（2026.3.0.3）
+
+发行附件同时提供 Setup EXE 与 portable ZIP。安装版默认安装到当前用户的
+`%LOCALAPPDATA%\Programs\OECT_Capture`，无需管理员权限；可更改位置。
+两个版本使用同一套采集程序，安装器不参与数据接收及绘图。
+安装版创建开始菜单入口，并可创建桌面快捷方式；在 Windows“已安装的应用”中卸载。
+
+目录结构为 OECT_Capture/OECT_Capture_版本号，外层共享 Data_capture 和 Heartbeat_library。
+安装版更新继续使用现有 ZIP 更新器，下载后仍须手动确认重启安装，
+并同步开始菜单、桌面快捷方式和卸载显示版本。卸载程序存放于外层 .installer，
+不会随版本目录替换而消失。
+
+卸载只删除打包清单中的程序文件，保留实验数据、样本库、非程序文件及设置。
+当前配置同时保存于外层 .settings/oect_capture_config.toml，重新安装时恢复；
+系统中的应用偏好也保留。用户自行选择的外部或网络数据目录不被迁移或删除。
+建议本机安装程序，按实验需要另外选择数据目录。
+
+Setup 未配置代码签名，Windows 可能显示“未知发布者”或 SmartScreen 提示；
+本版本未声称通过 Microsoft 信誉认证。仅从本项目正式发行页下载，并核对 SHA256。
+便携版只需解压整个目录，不能仅拷贝 EXE。
+
 本仓库用于公开分发 Windows 便携应用及使用文档。应用通过 USB 虚拟串口连接 STM32，接收两颗 ADS131M08 的 16 路采样数据，提供实时波形、原始数据保存、漏极电流换算及采集后频谱分析。
 
 应用源码、MCU 固件和实验数据不在此仓库发布。
@@ -13,9 +35,9 @@
 - [v2026.2.0.0 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.2.0.0)
 - [v2026.2.0.1 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.2.0.1)
 - [v2026.2.0.2 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.2.0.2)
-- [v2026.3.0.2 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.3.0.2)
+- [v2026.3.0.3 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.3.0.3)
 
-本说明适用于 **2026.3.0.2 正式版**，配套 **MCU 2026.1.0.8**。
+本说明适用于 **2026.3.0.3 正式版**，配套 **MCU 2026.1.0.8**。
 
 1. 在发行页的 Assets 中下载所需版本的便携 ZIP。
 2. 将 ZIP **完整解压**到可写目录，保留 `_internal` 等子目录。不能只复制 EXE，也不要直接在压缩包内运行。
