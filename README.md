@@ -35,9 +35,9 @@ Setup 未配置代码签名，Windows 可能显示“未知发布者”或 Smart
 - [v2026.2.0.0 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.2.0.0)
 - [v2026.2.0.1 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.2.0.1)
 - [v2026.2.0.2 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.2.0.2)
-- [v2026.3.0.3 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.3.0.3)
+- [v2026.3.0.4 正式发行页面](https://github.com/w0jwj0w/OECT_Capture_Releases/releases/tag/v2026.3.0.4)
 
-本说明适用于 **2026.3.0.3 正式版**，配套 **MCU 2026.1.0.8**。
+本说明适用于 **2026.3.0.4 正式版**，配套 **MCU 2026.1.0.8**。
 
 1. 在发行页的 Assets 中下载所需版本的便携 ZIP。
 2. 将 ZIP **完整解压**到可写目录，保留 `_internal` 等子目录。不能只复制 EXE，也不要直接在压缩包内运行。
@@ -325,3 +325,8 @@ Data_capture/日期时间/
 新记录在串口真正发送START时记录单调时钟，ACK返回后才同步保存，避免慢盘额外错移。旧记录不能凭空补正启动时间，查看时会提示旧版限制。没有硬件共同标记仍只是估计对齐，不用于精确响应延迟。
 
 独立DAC固件必须升级到2026.3.0.2；旧3.0.1固件存在有限回放末点提前回待机问题，新软件拒绝用旧固件开始新试验。ADC继续2026.1.0.8，无需更换。新DAC固件末点保持Ts后在下一节拍回待机；ARM二进制指令仿真覆盖两点、末点为零、重复与组合四种情况，但未代替本版示波器时序复测。应用更新不会自动烧录板卡。
+
+
+### 2026.3.0.4 安装兼容修订
+
+快捷方式创建和校验采用 Windows Unicode IShellLinkW 接口，避免英文系统下中文安装路径的旧COM接口兼容问题。开始菜单、桌面和卸载信息随程序内更新同步；卸载产品名称固定为 OECT Capture，版本号单独更新。采集与固件不变。
