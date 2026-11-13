@@ -1,0 +1,87 @@
+name: Publish verified OECT Capture v2026-3-0-2 application
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-v2026-3-0-2.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v2026-3-0-2
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ZIP: OECT_Capture_portable_2026.3.0.2.zip
+      EXPECTED_SHA256: eef46492efee4caebd0ae62113b153a814186a483218f352b53cd6849b440c7d
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble only the prebuilt application and verify integrity
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,shutil,zipfile
+          parts=sorted(pathlib.Path('packages/v2026.3.0.2').glob('part*'))
+          assert [p.name for p in parts]==[f'part{i:02d}' for i in range(1,13)], 'Application transfer is incomplete'
+          package=pathlib.Path(os.environ['ZIP'])
+          with package.open('xb') as target:
+              for part in parts:
+                  with part.open('rb') as source:shutil.copyfileobj(source,target)
+          assert hashlib.sha256(package.read_bytes()).hexdigest()==os.environ['EXPECTED_SHA256'], 'SHA256 mismatch'
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None, 'ZIP CRC failure'
+              manifest=json.loads(archive.read('OECT_Capture/OECT_Capture_2026.3.0.2/update_manifest.json'))
+              assert manifest==dict(install_protocol=2,version='2026.3.0.2'), 'Installer manifest mismatch'
+              assert not any('/Data_capture/' in n and not n.endswith('/') for n in archive.namelist()), 'Unexpected acquisition files'
+          print('Application bytes match the locally validated portable package.')
+          PY
+      - name: Publish only one portable application attachment
+        run: |
+          set -euo pipefail
+          tag=v2026.3.0.2
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/existing.json" 2>/dev/null; then
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published release exists; never replace it"' "$RUNNER_TEMP/existing.json"
+          else
+            cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          ## 2026.3.0.2（正式发行；ADC MCU 2026.1.0.8，独立 DAC 2026.3.0.2）
+          
+          - 修复普通采集/心跳试验双向互斥，启动与后台按钮共同管理；心跳采集直接在主界面显示全部已选通道的实时波形，主采集按钮可停止心跳。
+          - START时间取串口实际写入调用前的单调时钟，ACK后再同步落盘，去掉文件写入延迟导致的额外对齐偏移；仍为软件估计，不代表硬件同步。
+          - 默认全部已采集通道频谱与输入对照，增加滚动总览及保存片段时域页；导出保留全部所选通道。
+          - 固定V、µA、Hz、s单位，禁用自动SI前缀；不改变电流换算及幅度数值。参数标签与输入框成组排列。
+          - 首次正常启动创建空的共享Heartbeat_library目录；选择样本库默认打开该目录，已有库及数据保留，应用包不包含实验样本。
+          - 独立DAC末点保持完整一个采样周期，下个边界才返回待机并报告DONE；修正首点与重复起点事件语义。四种实际ARM二进制指令仿真通过，新版末点时序仍待示波器复测。
+          - 心跳新采集需要DAC 2026.3.0.2，旧记录可读取并提示旧START和末点限制；ADC固件不变。应用不自动烧录。
+          
+          
+          公开库仅提供应用包。独立DAC新固件和源码在私有库发行附件；当前已刷3.0.1的源板需要升级3.0.2才能应用末点修复。本次未操作现场串口/烧录，ADC联测和精密时基/电压校准仍待完成。
+          
+          107 项回归、解析器自检和 7 项冻结程序自检通过。
+          
+          ZIP SHA256 eef46492efee4caebd0ae62113b153a814186a483218f352b53cd6849b440c7d
+          NOTES
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --title 'OECT Capture 2026.3.0.2' --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$tag" "$ZIP" --clobber
+          gh release download "$tag" --pattern "$ZIP" --dir "$RUNNER_TEMP/downloaded"
+          echo "$EXPECTED_SHA256  $RUNNER_TEMP/downloaded/$ZIP" | sha256sum --check
+          gh release edit "$tag" --draft=false --prerelease=false --latest
+      - name: Remove transfer pieces from the current branch after publication
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r --ignore-unmatch packages/v2026.3.0.2
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Remove temporary application transfer pieces after release'
+            git push origin HEAD:main
+          fi
