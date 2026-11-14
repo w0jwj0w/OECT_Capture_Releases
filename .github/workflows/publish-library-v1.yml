@@ -1,0 +1,58 @@
+name: Publish optional ECG heartbeat library v1
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-library-v1.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Assemble and verify all library entries
+        run: |
+          @'
+          import pathlib,hashlib,zipfile,csv,io
+          files=sorted(pathlib.Path('packages/heartbeat-library-v1').glob('part*'))
+          assert [p.name for p in files]==[f'part{i:02d}' for i in range(1,6)]
+          target=pathlib.Path('Heartbeat_library_ECG_fourClass_v1.zip')
+          with target.open('wb') as out:
+              for f in files:out.write(f.read_bytes())
+          digest=hashlib.sha256(target.read_bytes()).hexdigest()
+          assert digest=='ba26065a18e26ad20410bbe9a2fca60fa4769a4a1e9831a51de4a92c56ced799'
+          with zipfile.ZipFile(target) as z:
+              assert z.testzip() is None
+              rows=list(csv.DictReader(io.StringIO(z.read('ECG_fourClass_v1/index.csv').decode('utf-8-sig'))))
+              assert len(rows)==11600
+              for row in rows:assert hashlib.sha256(z.read('ECG_fourClass_v1/'+row['relative_file'])).hexdigest()==row['npy_sha256']
+              pathlib.Path('README_Heartbeat_library.md').write_bytes(z.read('ECG_fourClass_v1/README.md'))
+          pathlib.Path('SHA256SUMS.txt').write_text(digest+'  '+target.name+'\n')
+          '@ | Set-Content assemble_library.py -Encoding utf8
+          python assemble_library.py
+          if ($LASTEXITCODE -ne 0) { throw 'Library verification failed' }
+      - name: Publish independent library without changing application Latest
+        run: |
+          gh release create heartbeat-library-v1 Heartbeat_library_ECG_fourClass_v1.zip SHA256SUMS.txt README_Heartbeat_library.md --target $env:GITHUB_SHA --title '心跳样本库 ECG fourClass v1' --notes-file README_Heartbeat_library.md --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'Library publication failed' }
+          gh release download heartbeat-library-v1 --pattern Heartbeat_library_ECG_fourClass_v1.zip --dir "$env:RUNNER_TEMP/library_download"
+          if ($LASTEXITCODE -ne 0) { throw 'Library download verification failed' }
+          if ((Get-FileHash "$env:RUNNER_TEMP/library_download/Heartbeat_library_ECG_fourClass_v1.zip").Hash.ToLowerInvariant() -ne 'ba26065a18e26ad20410bbe9a2fca60fa4769a4a1e9831a51de4a92c56ced799') { throw 'Library download hash mismatch' }
+      - name: Remove temporary transfer parts
+        run: |
+          git fetch origin main
+          git switch -c cleanup origin/main
+          git rm -r packages/heartbeat-library-v1
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Remove heartbeat library transfer parts after publication'
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Transfer cleanup failed' }
